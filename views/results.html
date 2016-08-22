@@ -1,0 +1,10 @@
+<div class="results">
+  <div class="dialog">
+    <div class="title r" ng-if="correct">You both got the answer correct.</div>
+    <div class="title w" ng-if="!correct">One of you did not agree or got the answer wrong. Sorry!</div>
+    <div class="graphic r" ng-if="correct"></div>
+    <div class="graphic w" ng-if="!correct"></div>
+    <div class="button" ng-if="correct" ng-click="next()">Next Question</div>
+    <div class="button" ng-if="!correct" ng-click="newGame()">New Game</div>
+  </div>
+</div>
