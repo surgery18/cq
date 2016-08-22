@@ -4,8 +4,10 @@
     "component.modal",
     "component.answer",
     "service.network",
+    "service.question",
     "directive.choice",
     "modal-views.waiting",
+    "modal-views.userleft",
     "pages.home",
     "pages.game"
   ])
@@ -28,46 +30,111 @@
   }]);
 
   angular.module("pages.game", [])
-  .controller("gamePageCtrl", ["$scope", "modalService", "$timeout", "networkService", "answerService", function($scope, modalService, $timeout, networkService, answerService){
+  .controller("gamePageCtrl", ["$scope", "$rootScope", "modalService", "$timeout", "networkService", "answerService", "questionService", function($scope, $rootScope, modalService, $timeout, networkService, answerService, questionService){
     modalService.openModal({
       close: false,
       body: "Please hold tight while we find another player. This dialog will go away when you are connected.",
       title: "Finding Another player."
       //templateUrl: "views/test.html"
     });
-    var room = "join";
-    $scope.question = {
+    $scope.question = questionService.get().question;
+    networkService.initSocket();
+    networkService.on("START", function(data){
+      if(networkService.getRoom() !== "join") return;
+      networkService.setRoom(data.room);
+      questionService.setQuestion(data.question);
+      $scope.question = data.question;
+      $timeout(function(){
+        $scope.$apply();
+      });
+      modalService.close();
+    });
+    networkService.on("COMPLETE", function(data){
+      if(!modalService.isOpen()) return;
+
+      if (data.same) {
+        questionService.setQuestion(data.question);
+        $scope.question = questionService.get().question;
+
+        $timeout(function(){
+          $scope.$apply();
+        });
+      }
+      modalService.close();
+      if(!data.same) networkService.disconnect();
+      answerService.openDialog(data.same);
+    })
+    networkService.on("user_disconnected", function(data){
+      //open modal telling them to find new game
+      networkService.disconnect();
+      modalService.openModal({
+        close: false,
+        title: "User Left",
+        templateUrl: "views/userleft.html",
+        controller: "userLeftCtrl",
+      });
+    });
+
+    $scope.$on('$destroy', function(){
+      networkService.disconnect();
+    });
+
+    //modalService.close();
+
+  }]);
+
+  angular.module("service.question", [])
+  .factory("questionService", [function(){
+    var curQuestion = {
       question: "Question",
       a: "Is this the answer?",
       b: "Or is this the answer?"
     };
-    // networkService.initSocket();
-    // networkService.on("START", function(data){
-    //   room = data.room;
-    //   $scope.question = data.question;
-    //   $timeout(function(){
-    //     $scope.$apply();
-    //   });
-    //   modalService.close();
-    // });
-    modalService.close();
 
+    var picked = "";
+
+    var service = {
+      setQuestion: function(question){
+        curQuestion = question;
+      },
+      setPicked: function(pick){
+        picked = pick;
+      },
+      get: function(){
+        return {question: curQuestion, picked: picked};
+      }
+    };
+
+    return service;
   }]);
 
   angular.module("service.network", [])
   .factory("networkService", [function(){
     var socket = null;
+    var room = "join";
     var service = {
       initSocket: function(){
         socket = io();
         socket.on('connect', function() {
           //socket.emit("PING", {});
-          console.log('check 2', socket.connected);
+          //console.log('check 2', socket.connected);
           socket.emit("room", {room_name: "join"});
         });
       },
       on: function(what, func){
         socket.on(what, func);
+      },
+      send: function(what, data){
+        socket.emit(what, data);
+      },
+      setRoom: function(name){
+        room = name;
+      },
+      getRoom: function(){
+        return room;
+      },
+      disconnect: function(){
+        socket.disconnect();
       }
     };
 
@@ -75,7 +142,7 @@
   }]);
 
   angular.module("directive.choice", [])
-  .directive("choice", function($document, modalService){
+  .directive("choice", function($document, modalService, questionService, networkService){
     return {
       scope: {
         c: "@"
@@ -98,6 +165,8 @@
             pos = "left";
           }
           element.addClass("picked");
+          questionService.setPicked(picked);
+          networkService.send("PICKED", {qid: questionService.get().question.id, picked: picked, room: networkService.getRoom()});
           modalService.openModal({
             close: false,
             backdrop: false,
@@ -105,10 +174,7 @@
             title: "Waiting on other player...",
             //body: "You picked choice " + picked + ". You are now waiting on the other player to pick their answer. Just hope you guys agree on the same answer. If you don't it is game over."
             templateUrl: "views/waiting.html",
-            controller: "waitingCtrl",
-            data: {
-              picked: picked
-            }
+            controller: "waitingCtrl"
           });
           scope.$on("NEW_CHOICE", function(){
             element.removeClass("picked");
@@ -132,7 +198,7 @@
         $compile(el)(scope);
       },
       close: function(){
-        el.remove();
+        if(el) el.remove();
         scope.$destroy();
       }
     };
@@ -165,14 +231,21 @@
   }]);
 
   angular.module("modal-views.waiting", [])
-  .controller("waitingCtrl", ["$scope", "modalService", "$rootScope", "answerService", function($scope, modalService, $rootScope, answerService){
-    $scope.picked = modalService.getData().picked;
+  .controller("waitingCtrl", ["$scope", "modalService", "$rootScope", "answerService", "questionService", function($scope, modalService, $rootScope, answerService, questionService){
+    $scope.picked = questionService.get().picked;
     $scope.test =  "FAKE DONE";
     $scope.fakeit = function(){
       // get answer from Server
       modalService.close();
       answerService.openDialog(true);
     };
+  }]);
+
+  angular.module("modal-views.userleft", [])
+  .controller("userLeftCtrl", ["$scope", function($scope){
+    $scope.new = function(){
+      window.location = "/game";
+    }
   }]);
 
   angular.module("component.modal", [])
@@ -237,8 +310,15 @@
       },
 
       close: function() {
-        el.remove();
+        if (el) {
+          el.remove();
+          el = null;
+        }
         scope.$destroy();
+      },
+
+      isOpen: function(){
+        return el !== null
       },
 
       getData: function() {
